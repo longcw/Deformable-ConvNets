@@ -15,13 +15,14 @@ cdef inline np.float32_t min(np.float32_t a, np.float32_t b):
     return a if a <= b else b
 
 def cpu_soft_nms(np.ndarray[float, ndim=2] boxes, float sigma=0.5, float Nt=0.3, float threshold=0.001, unsigned int method=0):
-    cdef unsigned int N = boxes.shape[0]
+    cdef unsigned int n_boxes = boxes.shape[0]
     cdef float iw, ih, box_area
     cdef float ua
     cdef int pos = 0
     cdef float maxscore = 0
     cdef int maxpos = 0
     cdef float x1,x2,y1,y2,tx1,tx2,ty1,ty2,ts,area,weight,ov
+    cdef unsigned int N = n_boxes;
 
     i = 0
     while i < N:

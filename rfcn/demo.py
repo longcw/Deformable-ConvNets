@@ -125,7 +125,7 @@ def main():
             cls_dets = cls_dets[cls_dets[:, -1] > 0.7, :]
             dets_nms.append(cls_dets)
         print 'testing {} {:.2f}ms'.format(im_name, toc() * 1000)
-        print 'nms: {:.2f}ms'.format(nms_t.total_time * 1000)
+        print 'nms: {:.2f}ms'.format(nms_t.average_time * 1000)
         nms_t.clear()
         # visualize
         im = cv2.imread(cur_path + '/../demo/' + im_name)
