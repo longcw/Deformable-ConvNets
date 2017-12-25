@@ -89,7 +89,7 @@ def main():
                           provide_data=provide_data, provide_label=provide_label,
                           arg_params=arg_params, aux_params=aux_params)
     # nms = gpu_nms_wrapper(config.TEST.NMS, 0)
-    # nms = soft_nms_wrapper(config.TEST.NMS, method=2)
+    # nms = soft_nms_wrapper(config.TEST.NMS, method=1)
     nms = gpu_soft_nms_wrapper(config.TEST.NMS, method=2, device_id=0)
 
     # warm up
