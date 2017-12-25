@@ -5,8 +5,8 @@ symbol: resnet_v1_101_rfcn
 gpus: '0'
 CLASS_AGNOSTIC: true
 SCALES:
-- 600
-- 1000
+- 400
+- 1400
 default:
   frequent: 20
   kvstore: device
