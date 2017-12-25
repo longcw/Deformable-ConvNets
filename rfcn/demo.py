@@ -30,6 +30,7 @@ from symbols import *
 from utils.load_model import load_param
 from utils.show_boxes import show_boxes
 from utils.tictoc import tic, toc
+from utils.timer import Timer
 from nms.nms import py_nms_wrapper, cpu_nms_wrapper, gpu_nms_wrapper, soft_nms_wrapper, gpu_soft_nms_wrapper
 
 def parse_args():
@@ -89,7 +90,7 @@ def main():
                           provide_data=provide_data, provide_label=provide_label,
                           arg_params=arg_params, aux_params=aux_params)
     # nms = gpu_nms_wrapper(config.TEST.NMS, 0)
-    # nms = soft_nms_wrapper(config.TEST.NMS, method=1)
+    # nms = soft_nms_wrapper(config.TEST.NMS, method=2)
     nms = gpu_soft_nms_wrapper(config.TEST.NMS, method=2, device_id=0)
 
     # warm up
@@ -101,6 +102,7 @@ def main():
         scores, boxes, data_dict = im_detect(predictor, data_batch, data_names, scales, config)
 
     # test
+    nms_t = Timer()
     for idx, im_name in enumerate(image_names):
         data_batch = mx.io.DataBatch(data=[data[idx]], label=[], pad=0, index=idx,
                                      provide_data=[[(k, v.shape) for k, v in zip(data_names, data[idx])]],
@@ -116,11 +118,15 @@ def main():
             cls_scores = scores[:, j, np.newaxis]
             cls_boxes = boxes[:, 4:8] if config.CLASS_AGNOSTIC else boxes[:, j * 4:(j + 1) * 4]
             cls_dets = np.hstack((cls_boxes, cls_scores))
+            nms_t.tic()
             keep = nms(cls_dets)
+            nms_t.toc()
             cls_dets = cls_dets[keep, :]
             cls_dets = cls_dets[cls_dets[:, -1] > 0.7, :]
             dets_nms.append(cls_dets)
-        print 'testing {} {:.4f}s'.format(im_name, toc())
+        print 'testing {} {:.2f}ms'.format(im_name, toc() * 1000)
+        print 'nms: {:.2f}ms'.format(nms_t.total_time * 1000)
+        nms_t.clear()
         # visualize
         im = cv2.imread(cur_path + '/../demo/' + im_name)
         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
