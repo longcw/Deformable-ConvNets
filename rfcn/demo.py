@@ -30,7 +30,7 @@ from symbols import *
 from utils.load_model import load_param
 from utils.show_boxes import show_boxes
 from utils.tictoc import tic, toc
-from nms.nms import py_nms_wrapper, cpu_nms_wrapper, gpu_nms_wrapper
+from nms.nms import py_nms_wrapper, cpu_nms_wrapper, gpu_nms_wrapper, soft_nms_wrapper, gpu_soft_nms_wrapper
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Show Deformable ConvNets demo')
@@ -62,7 +62,7 @@ def main():
                'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
 
     # load demo data
-    image_names = ['COCO_test2015_000000000891.jpg', 'COCO_test2015_000000001669.jpg']
+    image_names = ['lindau_000024_000019_leftImg8bit.png', 'COCO_test2015_000000000891.jpg', 'COCO_test2015_000000001669.jpg']
     data = []
     for im_name in image_names:
         assert os.path.exists(cur_path + '/../demo/' + im_name), ('%s does not exist'.format('../demo/' + im_name))
@@ -82,12 +82,15 @@ def main():
     max_data_shape = [[('data', (1, 3, max([v[0] for v in config.SCALES]), max([v[1] for v in config.SCALES])))]]
     provide_data = [[(k, v.shape) for k, v in zip(data_names, data[i])] for i in xrange(len(data))]
     provide_label = [None for i in xrange(len(data))]
-    arg_params, aux_params = load_param(cur_path + '/../model/' + ('rfcn_dcn_coco' if not args.rfcn_only else 'rfcn_coco'), 0, process=True)
+    arg_params, aux_params = load_param(cur_path + '/../model/' + ('rfcn_dcn_coco' if not args.rfcn_only else 'rfcn_coco'),
+                                        config.TEST.test_epoch, process=True)
     predictor = Predictor(sym, data_names, label_names,
                           context=[mx.gpu(0)], max_data_shapes=max_data_shape,
                           provide_data=provide_data, provide_label=provide_label,
                           arg_params=arg_params, aux_params=aux_params)
-    nms = gpu_nms_wrapper(config.TEST.NMS, 0)
+    # nms = gpu_nms_wrapper(config.TEST.NMS, 0)
+    # nms = soft_nms_wrapper(config.TEST.NMS, method=2)
+    nms = gpu_soft_nms_wrapper(config.TEST.NMS, method=2, device_id=0)
 
     # warm up
     for j in xrange(2):

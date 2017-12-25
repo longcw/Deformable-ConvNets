@@ -1,7 +1,7 @@
 import numpy as np
 
 from cpu_nms import cpu_nms, cpu_soft_nms
-from gpu_nms import gpu_nms
+from gpu_nms import gpu_nms, gpu_soft_nms
 
 def soft_nms(dets, sigma=0.6, Nt=0.3, threshold=0.001, method=1):
 
@@ -10,6 +10,18 @@ def soft_nms(dets, sigma=0.6, Nt=0.3, threshold=0.001, method=1):
                         np.float32(threshold),
                         np.uint8(method))
     return keep
+
+
+def soft_nms_wrapper(thresh, method):
+    def _nms(dets):
+        return soft_nms(dets, Nt=thresh, method=method)
+    return _nms
+
+
+def gpu_soft_nms_wrapper(thresh, method, device_id):
+    def _nms(dets):
+        return gpu_soft_nms(dets, sigma=0.6, Nt=thresh, threshold=0.001, method=method, device_id=device_id)
+    return _nms
 
 
 def py_nms_wrapper(thresh):

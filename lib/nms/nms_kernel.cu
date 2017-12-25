@@ -8,6 +8,7 @@
 #include "gpu_nms.hpp"
 #include <vector>
 #include <iostream>
+#include <cmath>
 
 #define CUDA_CHECK(condition) \
   /* Code block avoids redefinition of cudaError_t error */ \
@@ -32,7 +33,7 @@ __device__ inline float devIoU(float const * const a, float const * const b) {
 }
 
 __global__ void nms_kernel(const int n_boxes, const float nms_overlap_thresh,
-                           const float *dev_boxes, unsigned long long *dev_mask) {
+                           const float *dev_boxes, unsigned long long *dev_mask, float *ious) {
   const int row_start = blockIdx.y;
   const int col_start = blockIdx.x;
 
@@ -68,7 +69,9 @@ __global__ void nms_kernel(const int n_boxes, const float nms_overlap_thresh,
       start = threadIdx.x + 1;
     }
     for (i = start; i < col_size; i++) {
-      if (devIoU(cur_box, block_boxes + i * 5) > nms_overlap_thresh) {
+      float iou = devIoU(cur_box, block_boxes + i * 5);
+      ious[cur_box_idx * n_boxes + (threadsPerBlock * col_start) + i] = iou;
+      if (iou > nms_overlap_thresh) {
         t |= 1ULL << i;
       }
     }
@@ -94,6 +97,7 @@ void _nms(int* keep_out, int* num_out, const float* boxes_host, int boxes_num,
 
   float* boxes_dev = NULL;
   unsigned long long* mask_dev = NULL;
+  float * iou_dev = NULL;
 
   const int col_blocks = DIVUP(boxes_num, threadsPerBlock);
 
@@ -107,13 +111,17 @@ void _nms(int* keep_out, int* num_out, const float* boxes_host, int boxes_num,
   CUDA_CHECK(cudaMalloc(&mask_dev,
                         boxes_num * col_blocks * sizeof(unsigned long long)));
 
+  CUDA_CHECK(cudaMalloc(&iou_dev,
+                        boxes_num * boxes_num * sizeof(float)));
+
   dim3 blocks(DIVUP(boxes_num, threadsPerBlock),
               DIVUP(boxes_num, threadsPerBlock));
   dim3 threads(threadsPerBlock);
   nms_kernel<<<blocks, threads>>>(boxes_num,
                                   nms_overlap_thresh,
                                   boxes_dev,
-                                  mask_dev);
+                                  mask_dev,
+                                  iou_dev);
 
   std::vector<unsigned long long> mask_host(boxes_num * col_blocks);
   CUDA_CHECK(cudaMemcpy(&mask_host[0],
@@ -139,6 +147,130 @@ void _nms(int* keep_out, int* num_out, const float* boxes_host, int boxes_num,
   }
   *num_out = num_to_keep;
 
+  CUDA_CHECK(cudaFree(boxes_dev));
+  CUDA_CHECK(cudaFree(mask_dev));
+}
+
+
+void _soft_nms(int* keep_out, int* num_out, const float* boxes_host, const int boxes_num,
+          const int boxes_dim, float sigma, float nms_overlap_thresh, float soft_threshold, int method, int device_id) {
+
+  _set_device(device_id);
+  
+  float* boxes_dev = NULL;
+  float* iou_dev = NULL;
+  unsigned long long* mask_dev = NULL;
+
+  const int col_blocks = DIVUP(boxes_num, threadsPerBlock);
+
+  CUDA_CHECK(cudaMalloc(&boxes_dev,
+                        boxes_num * boxes_dim * sizeof(float)));
+  CUDA_CHECK(cudaMemcpy(boxes_dev,
+                        boxes_host,
+                        boxes_num * boxes_dim * sizeof(float),
+                        cudaMemcpyHostToDevice));
+
+  CUDA_CHECK(cudaMalloc(&mask_dev,
+                        boxes_num * col_blocks * sizeof(unsigned long long)));
+
+  CUDA_CHECK(cudaMalloc(&iou_dev,
+                        boxes_num * boxes_num * sizeof(float)));
+
+  dim3 blocks(DIVUP(boxes_num, threadsPerBlock),
+              DIVUP(boxes_num, threadsPerBlock));
+  dim3 threads(threadsPerBlock);
+  nms_kernel<<<blocks, threads>>>(boxes_num,
+                                  nms_overlap_thresh,
+                                  boxes_dev,
+                                  mask_dev,
+                                  iou_dev);
+
+  std::vector<unsigned long long> mask_host(boxes_num * col_blocks);
+  CUDA_CHECK(cudaMemcpy(&mask_host[0],
+                        mask_dev,
+                        sizeof(unsigned long long) * boxes_num * col_blocks,
+                        cudaMemcpyDeviceToHost));
+
+  // soft nms
+  float iou_host[boxes_num * boxes_num];
+  CUDA_CHECK(cudaMemcpy(iou_host,
+                        iou_dev,
+                        sizeof(float) * boxes_num * boxes_num,
+                        cudaMemcpyDeviceToHost));
+  
+
+  int boxes_ind[boxes_num];
+  float scores[boxes_num];
+  for (int i = 0; i < boxes_num; i++) {
+    boxes_ind[i] = i;
+    scores[i] = boxes_host[i * 5 + 4];
+  }
+  int N = boxes_num;  // remaining boxes
+  for (int i = 0; i < N; i++) {
+
+    // get max box
+    float maxscore = scores[boxes_ind[i]];
+    int maxpos = i;
+    int pos = i + 1;
+    while (pos < N) {
+      float tmp_score = scores[boxes_ind[pos]];
+      if (maxscore < tmp_score) {
+        maxscore = tmp_score;
+        maxpos = pos;
+      }
+      pos++;
+    }
+    
+    // swap ith box with position of max box
+    int tmp_ind = boxes_ind[i];
+    boxes_ind[i] = boxes_ind[maxpos];
+    boxes_ind[maxpos] = tmp_ind;
+    
+    // NMS iterations, note that N changes if detection boxes fall below threshold
+    int max_ind = boxes_ind[i];
+    unsigned long long *p = &mask_host[0] + max_ind * col_blocks;
+    pos = i + 1;
+    while (pos < N) {
+      int curr_ind = boxes_ind[pos];
+      float iou = iou_host[curr_ind * boxes_num + max_ind] + iou_host[max_ind * boxes_num + curr_ind];
+      if (abs(iou_host[curr_ind * boxes_num + max_ind] - iou_host[max_ind * boxes_num + curr_ind]) > 1e-4) {
+        std::cout << iou_host[curr_ind * boxes_num + max_ind] << ", " << iou_host[max_ind * boxes_num + curr_ind] << std::endl;
+        iou = iou_host[curr_ind * boxes_num + max_ind] + iou_host[max_ind * boxes_num + curr_ind];
+      }
+      
+      float weight = 0;
+      switch(method) {
+        case 1: // linear
+          weight = 1 - iou;
+          break;
+        case 2: // gaussian
+          weight = std::exp(-iou * iou / sigma);
+          std::cout << iou << ", " << weight << std::endl;
+          break;
+        default:
+          if (iou > nms_overlap_thresh) {
+            weight = 0;
+          }
+          else {
+            weight = 1;
+          }
+          break;
+      }
+      scores[curr_ind] *= weight;
+      if (scores[curr_ind] < soft_threshold) {
+        boxes_ind[pos] = boxes_ind[N-1];
+        N--;
+        pos--;
+      }
+      pos++;
+    }
+  }
+
+  for (int i = 0; i < N; i++) {
+    keep_out[i] = boxes_ind[i];
+  }
+  *num_out = N;
+ 
   CUDA_CHECK(cudaFree(boxes_dev));
   CUDA_CHECK(cudaFree(mask_dev));
 }

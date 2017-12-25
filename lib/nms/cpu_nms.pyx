@@ -106,8 +106,10 @@ def cpu_soft_nms(np.ndarray[float, ndim=2] boxes, float sigma=0.5, float Nt=0.3,
 
             pos = pos + 1
 
-    keep = [i for i in range(N)]
-    return boxes[keep,:]
+    # keep = [i for i in range(N)]
+    keep = list(range(N))
+    # return boxes[keep,:]
+    return keep
 
 def cpu_nms(np.ndarray[np.float32_t, ndim=2] dets, np.float thresh):
     cdef np.ndarray[np.float32_t, ndim=1] x1 = dets[:, 0]
